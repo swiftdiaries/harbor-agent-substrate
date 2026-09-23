@@ -1,0 +1,18 @@
+atespace = "harbor-poc"
+snapshots_bucket = "gs://REPLACE/snapshots/"
+worker_label_key = "workload"
+worker_label_value = "REPLACE"
+
+[templates."poc/actor-smoke@1.0.0".agent]
+name = "harbor-smoke-agent-v1"
+atespace = "harbor-poc"
+image = "registry.example/harbor-smoke-agent@sha256:REPLACE"
+cpus = 1
+memory_mb = 512
+
+[templates."poc/actor-smoke@1.0.0".verifier]
+name = "harbor-smoke-verifier-v1"
+atespace = "harbor-poc"
+image = "registry.example/harbor-smoke-verifier@sha256:REPLACE"
+cpus = 1
+memory_mb = 512
