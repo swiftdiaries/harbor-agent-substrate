@@ -1,5 +1,12 @@
 import asyncio
+import posixpath
 import re
+import shlex
+import stat
+import sys
+import tarfile
+import tempfile
+from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 from ate_env import Client
@@ -115,16 +122,90 @@ class SubstrateEnvironment(BaseEnvironment):
                 await self.client.close()
 
     async def upload_file(self, source_path, target_path):
-        raise NotImplementedError
+        if self.actor is None:
+            raise RuntimeError("actor has not started")
+        source = Path(source_path)
+
+        def chunks():
+            with source.open("rb") as stream:
+                while chunk := stream.read(65536):
+                    yield chunk
+
+        await self.actor.write_file(
+            str(target_path), chunks(), mode=stat.S_IMODE(source.stat().st_mode)
+        )
 
     async def upload_dir(self, source_dir, target_dir):
-        raise NotImplementedError
+        remote_archive = f"/tmp/hb-transfer-{uuid4().hex}.tar.gz"
+        with tempfile.TemporaryDirectory() as temporary:
+            local_archive = Path(temporary) / "upload.tar.gz"
+            with tarfile.open(local_archive, "w:gz") as archive:
+                archive.add(source_dir, arcname=".")
+            try:
+                await self.upload_file(local_archive, remote_archive)
+                result = await self.exec(
+                    f"mkdir -p {shlex.quote(str(target_dir))} && "
+                    f"tar -xzf {shlex.quote(remote_archive)} -C {shlex.quote(str(target_dir))}"
+                )
+                if result.return_code != 0:
+                    raise RuntimeError(result.stderr or "remote extraction failed")
+            finally:
+                await self._remove_remote_archive(remote_archive)
 
     async def download_file(self, source_path, target_path):
-        raise NotImplementedError
+        if self.actor is None:
+            raise RuntimeError("actor has not started")
+        target = Path(target_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("wb") as stream:  # noqa: ASYNC230 - stream remote chunks to disk
+            async for chunk in self.actor.read_file(str(source_path)):
+                stream.write(chunk)
 
     async def download_dir(self, source_dir, target_dir):
-        raise NotImplementedError
+        remote_archive = f"/tmp/hb-transfer-{uuid4().hex}.tar.gz"
+        with tempfile.TemporaryDirectory() as temporary:
+            local_archive = Path(temporary) / "download.tar.gz"
+            try:
+                result = await self.exec(
+                    f"tar -czf {shlex.quote(remote_archive)} -C {shlex.quote(str(source_dir))} ."
+                )
+                if result.return_code != 0:
+                    raise RuntimeError(result.stderr or "remote archive failed")
+                await self.download_file(remote_archive, local_archive)
+                with tarfile.open(local_archive, "r:gz") as archive:
+                    for member in archive.getmembers():
+                        name = PurePosixPath(member.name)
+                        if (
+                            name.is_absolute()
+                            or ".." in name.parts
+                            or member.isdev()
+                            or member.isfifo()
+                        ):
+                            raise ValueError(f"unsafe archive member: {member.name}")
+                        if member.issym() or member.islnk():
+                            link = member.linkname
+                            resolved = posixpath.normpath(
+                                posixpath.join(posixpath.dirname(member.name), link)
+                            )
+                            if (
+                                link.startswith("/")
+                                or resolved == ".."
+                                or resolved.startswith("../")
+                            ):
+                                raise ValueError(f"unsafe archive link: {member.name}")
+                    archive.extractall(target_dir, filter="data")
+            finally:
+                await self._remove_remote_archive(remote_archive)
+
+    async def _remove_remote_archive(self, path: str) -> None:
+        original_error = sys.exc_info()[0] is not None
+        try:
+            result = await self.exec(f"rm -f {shlex.quote(path)}")
+            if result.return_code != 0:
+                raise RuntimeError(result.stderr or "remote archive cleanup failed")
+        except Exception:
+            if not original_error:
+                raise
 
     async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None):
         effective_user = self.default_user if user is None else user
