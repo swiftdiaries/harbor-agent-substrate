@@ -110,6 +110,9 @@ class SubstrateEnvironment(BaseEnvironment):
         try:
             if delete:
                 await self.actor.delete()
+                self.logger.debug(
+                    "Substrate actor %s deleted role=%s", self.actor_id, self.role
+                )
             else:
                 await self.actor.suspend()
                 async with asyncio.timeout(120):
@@ -117,6 +120,9 @@ class SubstrateEnvironment(BaseEnvironment):
                         await self.actor.info()
                     ).status != EnvironmentStatus.SUSPENDED:
                         await asyncio.sleep(0.2)
+                self.logger.debug(
+                    "Substrate actor %s suspended role=%s", self.actor_id, self.role
+                )
         finally:
             if self.client is not None:
                 await self.client.close()

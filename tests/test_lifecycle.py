@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -129,3 +130,15 @@ async def test_failed_readiness_deletes_recorded_actor(monkeypatch, tmp_path):
         assert FakeClient.instances[-1].closed
     finally:
         FakeClient.fail_readiness = False
+
+
+@pytest.mark.asyncio
+async def test_stop_logs_exact_actor_cleanup(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(
+        "harbor_agent_substrate.environment.Client", FakeClient, raising=False
+    )
+    environment = make_environment(tmp_path, "agent")
+    with caplog.at_level(logging.DEBUG):
+        await environment.start(False)
+        await environment.stop(delete=True)
+    assert f"Substrate actor {environment.actor_id} deleted role=agent" in caplog.text

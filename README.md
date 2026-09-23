@@ -51,3 +51,5 @@ uv run pytest tests/cluster/test_smoke.py -q
 ```
 
 The preflight checks installed templates against rendered manifests, then creates a temporary actor to test process and binary file routing. The cluster tests run Harbor's `oracle` on `poc/actor-smoke@1.0.0`, verify the declared artifact and reward, and must also prove concurrent isolation and suspended retention. Without `ATE_ENV_ENDPOINT`, the cluster test reports `UNVERIFIED SETUP` as a skip; that is not a PoC pass.
+
+Current state: the operator has no cluster available, so no installed template, real Harbor trial, concurrent run, or retention result has been verified. Local images were built but not pushed to a registry.
