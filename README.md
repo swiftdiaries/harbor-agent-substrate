@@ -4,6 +4,8 @@ An external Harbor environment provider for one versioned Linux smoke task. The 
 
 ## Local checks
 
+From a fresh clone of this repository:
+
 ```sh
 uv sync --dev
 uv run pytest tests/test_*.py -q
@@ -12,15 +14,20 @@ uv run ruff format --check .
 uv run ty check
 ```
 
-The lockfile currently uses exact Git `file://` revisions because the pinned Harbor commit is local and absent from its remote. Update the URLs to reachable commit pins before installing elsewhere.
+The lockfile pins publicly reachable Harbor and `ate-env-client` Git commits. The original Harbor design checkout had two additional documentation commits; its runtime code matches the pinned public commit.
 
 ## Prepare images and templates
 
-Build from the `/Users/adhita/projects/python/src/github.com` directory, which contains both `agent-substrate/env` and this repository. Use the Go and Ubuntu base digests in `REVISION_PINS.md`:
+The Dockerfiles expect this repository and the pinned `env` checkout under one parent directory. From this repository's root, prepare that layout and build with the parent as the Docker context:
 
 ```sh
+mkdir -p ../agent-substrate
+git clone https://github.com/swiftdiaries/env.git ../agent-substrate/env
+git -C ../agent-substrate/env checkout ab40c7bfb2049af1a7aade9e7bf9c6cac925b5ca
+cd ..
 docker build --build-arg GO_BASE=golang@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 --build-arg RUNTIME_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 -f harbor-agent-substrate/smoke/environment/Dockerfile -t harbor-smoke-agent:v1 .
 docker build --build-arg GO_BASE=golang@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 --build-arg RUNTIME_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 -f harbor-agent-substrate/images/verifier/Dockerfile -t harbor-smoke-verifier:v1 .
+cd harbor-agent-substrate
 ```
 
 Push both images to a registry visible to the existing cluster. Record their pushed `repo@sha256:...` digests in `REVISION_PINS.md`; local image IDs are not registry digests. Copy `provider.example.toml` to `provider.toml` and set those two digests, the atespace, worker label, and snapshot bucket. The configured CPU and memory must match both template limits.

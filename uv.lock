@@ -157,7 +157,7 @@ wheels = [
 [[package]]
 name = "ate-env-client"
 version = "0.1.0"
-source = { git = "file:///Users/adhita/projects/python/src/github.com/agent-substrate/env?subdirectory=clients%2Fpython&rev=ab40c7bfb2049af1a7aade9e7bf9c6cac925b5ca#ab40c7bfb2049af1a7aade9e7bf9c6cac925b5ca" }
+source = { git = "https://github.com/swiftdiaries/env.git?subdirectory=clients%2Fpython&rev=ab40c7bfb2049af1a7aade9e7bf9c6cac925b5ca#ab40c7bfb2049af1a7aade9e7bf9c6cac925b5ca" }
 dependencies = [
     { name = "grpcio" },
     { name = "protobuf" },
@@ -766,7 +766,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.23.0"
-source = { git = "file:///Users/adhita/projects/python/src/github.com/harbor-framework/harbor?rev=d9293aa1f532a14f14880c53b81f4d393ce7f148#d9293aa1f532a14f14880c53b81f4d393ce7f148" }
+source = { git = "https://github.com/harbor-framework/harbor.git?rev=3665008f25744a7137215b3425e4f06a70fda297#3665008f25744a7137215b3425e4f06a70fda297" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -812,8 +812,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ate-env-client", git = "file:///Users/adhita/projects/python/src/github.com/agent-substrate/env?subdirectory=clients%2Fpython&rev=ab40c7bfb2049af1a7aade9e7bf9c6cac925b5ca" },
-    { name = "harbor", git = "file:///Users/adhita/projects/python/src/github.com/harbor-framework/harbor?rev=d9293aa1f532a14f14880c53b81f4d393ce7f148" },
+    { name = "ate-env-client", git = "https://github.com/swiftdiaries/env.git?subdirectory=clients%2Fpython&rev=ab40c7bfb2049af1a7aade9e7bf9c6cac925b5ca" },
+    { name = "harbor", git = "https://github.com/harbor-framework/harbor.git?rev=3665008f25744a7137215b3425e4f06a70fda297" },
     { name = "pyyaml", specifier = ">=6" },
 ]
 
