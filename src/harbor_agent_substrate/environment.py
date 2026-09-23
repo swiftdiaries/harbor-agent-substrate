@@ -3,8 +3,8 @@ import re
 from uuid import uuid4
 
 from ate_env import Client
-from ate_env.types import EnvironmentStatus
-from harbor.environments.base import BaseEnvironment
+from ate_env.types import EnvironmentStatus, OutputSource
+from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import (
     EnvironmentCapabilities,
     EnvironmentResourceCapabilities,
@@ -127,4 +127,38 @@ class SubstrateEnvironment(BaseEnvironment):
         raise NotImplementedError
 
     async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None):
-        raise NotImplementedError
+        effective_user = self.default_user if user is None else user
+        if effective_user not in (None, "root", 0, "0"):
+            raise ValueError("only root user is supported")
+        if self.actor is None:
+            raise RuntimeError("actor has not started")
+        pid = None
+        completed = False
+        stdout = bytearray()
+        stderr = bytearray()
+        try:
+            async with asyncio.timeout(timeout_sec):
+                pid = await self.actor.start_process(
+                    ["sh", "-c", command],
+                    cwd=cwd or "",
+                    env={**self._startup_env(), **(env or {})},
+                )
+                async for chunk in self.actor.stream_outputs(pid, follow=True):
+                    if chunk.source == OutputSource.STDOUT:
+                        stdout.extend(chunk.data)
+                    elif chunk.source == OutputSource.STDERR:
+                        stderr.extend(chunk.data)
+                result = await self.actor.wait(pid)
+                completed = True
+                return ExecResult(
+                    stdout=stdout.decode(errors="replace"),
+                    stderr=stderr.decode(errors="replace"),
+                    return_code=result.exit_code,
+                )
+        finally:
+            if pid is not None and not completed:
+                cleanup = asyncio.create_task(self.actor.kill_process(pid))
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    await cleanup
