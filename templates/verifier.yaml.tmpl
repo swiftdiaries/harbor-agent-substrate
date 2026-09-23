@@ -1,0 +1,34 @@
+metadata:
+  name: harbor-smoke-verifier-v1
+  atespace: "{{ATESPACE}}"
+workerSelector:
+  matchLabels:
+    "{{WORKER_LABEL_KEY}}": "{{WORKER_LABEL_VALUE}}"
+containers:
+  - name: guest
+    image: "{{VERIFIER_IMAGE_DIGEST}}"
+    command: ["/usr/local/bin/ate-env-guest"]
+    env:
+      - name: PORT
+        value: "80"
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    resources:
+      limits:
+        - name: cpu
+          quantity: "1"
+        - name: memory
+          quantity: "512Mi"
+snapshotsConfig:
+  storageLocation: "{{SNAPSHOTS_BUCKET}}"
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default
+resources:
+  limits:
+    - name: cpu
+      quantity: "1"
+    - name: memory
+      quantity: "512Mi"

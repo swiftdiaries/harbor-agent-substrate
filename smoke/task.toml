@@ -1,0 +1,16 @@
+artifacts = ["/logs/artifacts/answer.txt"]
+
+[task]
+name = "poc/actor-smoke"
+version = "1.0.0"
+
+[environment]
+cpus = 1
+memory_mb = 512
+
+[verifier]
+environment_mode = "separate"
+
+[verifier.environment]
+cpus = 1
+memory_mb = 512
