@@ -29,6 +29,9 @@ class FakeActor:
         return SimpleNamespace(exit_code=0)
 
     async def delete(self):
+        if self.client.fail_delete_once:
+            self.client.fail_delete_once = False
+            raise RuntimeError("delete temporarily failed")
         self.client.deleted.append(self.id)
 
     async def suspend(self):
@@ -39,12 +42,15 @@ class FakeActor:
 class FakeClient:
     instances: ClassVar[list] = []
     fail_readiness = False
+    fail_delete_once = False
 
     def __init__(self, endpoint):
         self.created = []
         self.deleted = []
         self.suspended = []
         self.closed = False
+        self.fail_delete_once = type(self).fail_delete_once
+        type(self).fail_delete_once = False
         self.instances.append(self)
 
     async def create(self, actor_id, *, atespace, template_name, template_atespace):
@@ -53,6 +59,9 @@ class FakeClient:
 
     async def close(self):
         self.closed = True
+
+    def env(self, actor_id, *, atespace):
+        return FakeActor(self, actor_id)
 
 
 def make_environment(tmp_path, role, session_id="smoke"):
@@ -142,3 +151,46 @@ async def test_stop_logs_exact_actor_cleanup(monkeypatch, tmp_path, caplog):
         await environment.start(False)
         await environment.stop(delete=True)
     assert f"Substrate actor {environment.actor_id} deleted role=agent" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_failed_delete_can_be_retried(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "harbor_agent_substrate.environment.Client", FakeClient, raising=False
+    )
+    environment = make_environment(tmp_path, "agent")
+    await environment.start(False)
+    environment.client.fail_delete_once = True
+    with pytest.raises(RuntimeError, match="delete temporarily failed"):
+        await environment.stop(True)
+    await environment.stop(True)
+    assert (
+        sum(
+            client.deleted.count(environment.actor_id)
+            for client in FakeClient.instances
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_startup_cleanup_can_be_retried(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "harbor_agent_substrate.environment.Client", FakeClient, raising=False
+    )
+    FakeClient.fail_readiness = True
+    FakeClient.fail_delete_once = True
+    environment = make_environment(tmp_path, "agent")
+    try:
+        with pytest.raises(RuntimeError):
+            await environment.start(False)
+        await environment.stop(True)
+        assert (
+            sum(
+                client.deleted.count(environment.actor_id)
+                for client in FakeClient.instances
+            )
+            == 1
+        )
+    finally:
+        FakeClient.fail_readiness = False

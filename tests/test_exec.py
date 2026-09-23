@@ -35,6 +35,18 @@ class FakeActor:
         self.killed.append(pid)
 
 
+class DelayedLaunchActor(FakeActor):
+    def __init__(self):
+        super().__init__()
+        self.launched = asyncio.Event()
+
+    async def start_process(self, command, *, cwd, env):
+        self.started += 1
+        self.launched.set()
+        await asyncio.sleep(0.05)
+        return "pid-1"
+
+
 def environment(actor):
     instance = object.__new__(SubstrateEnvironment)
     instance.actor = actor
@@ -87,4 +99,23 @@ async def test_cancellation_waits_for_kill():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    assert actor.killed == ["pid-1"]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_launch_kills_process_after_pid_arrives():
+    actor = DelayedLaunchActor()
+    task = asyncio.create_task(environment(actor).exec("sleep 10"))
+    await actor.launched.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert actor.killed == ["pid-1"]
+
+
+@pytest.mark.asyncio
+async def test_timeout_during_launch_kills_process_after_pid_arrives():
+    actor = DelayedLaunchActor()
+    with pytest.raises(TimeoutError):
+        await environment(actor).exec("sleep 10", timeout_sec=0.01)
     assert actor.killed == ["pid-1"]

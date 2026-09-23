@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import posixpath
 import re
 import shlex
@@ -94,38 +95,39 @@ class SubstrateEnvironment(BaseEnvironment):
                     raise RuntimeError("guest readiness failed")
         except BaseException:
             try:
-                if self.actor is not None:
-                    await self.actor.delete()
-                else:
-                    await self.client.delete(self.actor_id, atespace=self.atespace)
-            finally:
-                await self.client.close()
-                self._stopped = True
+                await self.stop(True)
+            except BaseException as cleanup_error:  # noqa: BLE001 - preserve original failure
+                self.logger.debug(
+                    "Substrate actor %s startup cleanup failed: %s",
+                    self.actor_id,
+                    cleanup_error,
+                )
             raise
 
     async def stop(self, delete: bool):
-        if self._stopped or self.actor is None:
+        if self._stopped or self.actor_id is None:
             return
-        self._stopped = True
+        client = self.client or Client(self.endpoint)
+        actor = self.actor or client.env(self.actor_id, atespace=self.atespace)
         try:
             if delete:
-                await self.actor.delete()
+                await actor.delete()
                 self.logger.debug(
                     "Substrate actor %s deleted role=%s", self.actor_id, self.role
                 )
             else:
-                await self.actor.suspend()
+                await actor.suspend()
                 async with asyncio.timeout(120):
-                    while (
-                        await self.actor.info()
-                    ).status != EnvironmentStatus.SUSPENDED:
+                    while (await actor.info()).status != EnvironmentStatus.SUSPENDED:
                         await asyncio.sleep(0.2)
                 self.logger.debug(
                     "Substrate actor %s suspended role=%s", self.actor_id, self.role
                 )
+            self._stopped = True
         finally:
-            if self.client is not None:
-                await self.client.close()
+            await client.close()
+            self.client = None
+            self.actor = None
 
     async def upload_file(self, source_path, target_path):
         if self.actor is None:
@@ -220,16 +222,20 @@ class SubstrateEnvironment(BaseEnvironment):
         if self.actor is None:
             raise RuntimeError("actor has not started")
         pid = None
+        launch = None
         completed = False
         stdout = bytearray()
         stderr = bytearray()
         try:
             async with asyncio.timeout(timeout_sec):
-                pid = await self.actor.start_process(
-                    ["sh", "-c", command],
-                    cwd=cwd or "",
-                    env={**self._startup_env(), **(env or {})},
+                launch = asyncio.create_task(
+                    self.actor.start_process(
+                        ["sh", "-c", command],
+                        cwd=cwd or "",
+                        env={**self._startup_env(), **(env or {})},
+                    )
                 )
+                pid = await asyncio.shield(launch)
                 async for chunk in self.actor.stream_outputs(pid, follow=True):
                     if chunk.source == OutputSource.STDOUT:
                         stdout.extend(chunk.data)
@@ -243,6 +249,19 @@ class SubstrateEnvironment(BaseEnvironment):
                     return_code=result.exit_code,
                 )
         finally:
+            if pid is None and launch is not None:
+                try:
+                    pid = await asyncio.wait_for(asyncio.shield(launch), 30)
+                except TimeoutError:
+                    await self.actor.delete()
+                    launch.cancel()
+                    raise RuntimeError(
+                        "guest launch outcome unknown; actor deleted"
+                    ) from None
+                except Exception as launch_error:  # noqa: BLE001 - original failure is active
+                    logging.getLogger(__name__).debug(
+                        "Guest launch failed: %s", launch_error
+                    )
             if pid is not None and not completed:
                 cleanup = asyncio.create_task(self.actor.kill_process(pid))
                 try:

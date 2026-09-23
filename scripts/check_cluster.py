@@ -49,7 +49,14 @@ def _render_template(role: str, settings: dict) -> dict:
     }
     for key, value in replacements.items():
         template = template.replace("{{" + key + "}}", value)
-    return yaml.safe_load(template)
+    rendered = yaml.safe_load(template)
+    for resources in (rendered["resources"], rendered["containers"][0]["resources"]):
+        limits = {item["name"]: item["quantity"] for item in resources["limits"]}
+        if limits.get("cpu") != str(spec.cpus):
+            raise ValueError(f"{role} cpus do not match rendered template")
+        if limits.get("memory") != f"{spec.memory_mb}Mi":
+            raise ValueError(f"{role} memory_mb does not match rendered template")
+    return rendered
 
 
 def render_templates(settings: dict, directory: Path) -> None:
@@ -109,7 +116,19 @@ def _check_installed_templates(settings: dict) -> None:
             capture_output=True,
             text=True,
         ).stdout
-        installed = json.loads(output)
+        response = json.loads(output)
+        templates = response.get("actorTemplates", [])
+        installed = next(
+            (
+                item
+                for item in templates
+                if item.get("metadata", {}).get("name") == spec.name
+                and item.get("metadata", {}).get("atespace") == spec.atespace
+            ),
+            None,
+        )
+        if installed is None:
+            raise ValueError(f"installed {role} template {spec.name} was not returned")
         assert_manifest_matches(installed, expected, f"installed {role} template")
 
 
