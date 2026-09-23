@@ -2,7 +2,15 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from harbor.models.task.config import TaskConfig
+from harbor.models.task.config import (
+    EnvironmentConfig,
+    NetworkMode,
+    NetworkPolicy,
+    TaskConfig,
+    TaskOS,
+)
+from harbor.models.trial.config import ServiceVolumeConfig
+from harbor.models.trial.paths import TrialPaths
 
 
 @dataclass(frozen=True)
@@ -45,12 +53,16 @@ def load_task(context: Path) -> tuple[TaskKey, TaskConfig, str]:
 
 def select_pair(mapping: dict, key: TaskKey) -> TemplatePair:
     entry = mapping.get(f"{key.name}@{key.version}")
-    if not isinstance(entry, dict):
+    if entry is None:
         raise ValueError(f"missing template mapping for {key.name}@{key.version}")
+    if not isinstance(entry, dict):
+        raise TypeError("template mapping must be a dict")
     specs = {}
     for role in ("agent", "verifier"):
-        if not isinstance(entry.get(role), dict):
+        if role not in entry:
             raise ValueError(f"missing {role} template")
+        if not isinstance(entry[role], dict):
+            raise TypeError(f"{role} template must be a dict")
         try:
             spec = TemplateSpec(**entry[role])
         except (TypeError, ValueError) as exc:
@@ -61,3 +73,71 @@ def select_pair(mapping: dict, key: TaskKey) -> TemplatePair:
             raise ValueError(f"invalid {role} template resources")
         specs[role] = spec
     return TemplatePair(**specs)
+
+
+def validate_scope(
+    task: TaskConfig,
+    role: str,
+    effective: EnvironmentConfig,
+    template: TemplateSpec,
+    mounts: list[ServiceVolumeConfig],
+    network_policy: NetworkPolicy,
+    phase_network_policies: list[NetworkPolicy],
+    *,
+    trial_paths: TrialPaths,
+    stream: bool,
+    force_build: bool,
+) -> None:
+    for field, limit in (("cpus", template.cpus), ("memory_mb", template.memory_mb)):
+        if getattr(effective, field) != limit:
+            raise ValueError(f"{field} does not match template limit {limit}")
+    if effective.storage_mb is not None:
+        raise ValueError("storage_mb is unsupported")
+    if effective.gpus is not None or effective.tpu is not None or effective.gpu_types:
+        raise ValueError("accelerators are unsupported")
+    if effective.os != TaskOS.LINUX:
+        raise ValueError("Windows is unsupported")
+    if stream or force_build:
+        raise ValueError("stream/force_build are unsupported")
+    if task.agent.user not in (None, "root", 0, "0") or task.verifier.user not in (
+        None,
+        "root",
+        0,
+        "0",
+    ):
+        raise ValueError("custom user is unsupported")
+    if network_policy.network_mode != NetworkMode.PUBLIC or any(
+        policy != network_policy for policy in phase_network_policies
+    ):
+        raise ValueError("network policy is unsupported")
+    allowed = {
+        "/logs/verifier": trial_paths.verifier_dir.resolve(),
+    }
+    if role == "agent":
+        allowed.update(
+            {
+                "/logs/agent": trial_paths.agent_dir.resolve(),
+                "/logs/artifacts": (
+                    trial_paths.artifacts_dir / "logs/artifacts"
+                ).resolve(),
+                "/logs/user-agent": trial_paths.user_agent_dir.resolve(),
+            }
+        )
+    seen = set()
+    for mount in mounts:
+        target = mount.get("target")
+        if (
+            target in seen
+            or mount.get("type") != "bind"
+            or target not in allowed
+            or mount.get("source") != str(allowed[target])
+        ):
+            raise ValueError(f"unsupported mount: {mount}")
+        seen.add(target)
+    required = (
+        {"/logs/verifier"}
+        if role == "verifier"
+        else {"/logs/verifier", "/logs/agent", "/logs/artifacts"}
+    )
+    if not required <= seen:
+        raise ValueError("missing standard mount")
