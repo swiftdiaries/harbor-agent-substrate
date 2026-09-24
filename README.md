@@ -4,9 +4,16 @@ An external Harbor environment provider for one versioned Linux smoke task. The 
 
 ## Local checks
 
-From a fresh clone of this repository:
+Prerequisites: Git, `uv`, and Docker. Start in an empty directory and create this layout:
 
 ```sh
+mkdir harbor-poc
+cd harbor-poc
+git clone https://github.com/swiftdiaries/harbor-agent-substrate.git harbor-agent-substrate
+mkdir agent-substrate
+git clone https://github.com/swiftdiaries/env.git agent-substrate/env
+git -C agent-substrate/env checkout ab40c7bfb2049af1a7aade9e7bf9c6cac925b5ca
+cd harbor-agent-substrate
 uv sync --dev
 uv run pytest tests/test_*.py -q
 uv run ruff check .
@@ -14,23 +21,30 @@ uv run ruff format --check .
 uv run ty check
 ```
 
+The resulting layout is `harbor-poc/harbor-agent-substrate` and `harbor-poc/agent-substrate/env`.
+
 The lockfile pins publicly reachable Harbor and `ate-env-client` Git commits. The original Harbor design checkout had two additional documentation commits; its runtime code matches the pinned public commit.
 
 ## Prepare images and templates
 
-The Dockerfiles expect this repository and the pinned `env` checkout under one parent directory. From this repository's root, prepare that layout and build with the parent as the Docker context:
+The Dockerfiles expect this repository and the pinned `env` checkout under one parent directory. The checkout steps above already created this layout. From `harbor-poc/harbor-agent-substrate`, build with the parent as the Docker context:
 
 ```sh
-mkdir -p ../agent-substrate
-git clone https://github.com/swiftdiaries/env.git ../agent-substrate/env
-git -C ../agent-substrate/env checkout ab40c7bfb2049af1a7aade9e7bf9c6cac925b5ca
 cd ..
 docker build --build-arg GO_BASE=golang@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 --build-arg RUNTIME_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 -f harbor-agent-substrate/smoke/environment/Dockerfile -t harbor-smoke-agent:v1 .
 docker build --build-arg GO_BASE=golang@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 --build-arg RUNTIME_BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 -f harbor-agent-substrate/images/verifier/Dockerfile -t harbor-smoke-verifier:v1 .
 cd harbor-agent-substrate
 ```
 
-Push both images to a registry visible to the existing cluster. Record their pushed `repo@sha256:...` digests in `REVISION_PINS.md`; local image IDs are not registry digests. Copy `provider.example.toml` to `provider.toml` and set those two digests, the atespace, worker label, and snapshot bucket. The configured CPU and memory must match both template limits.
+Before the cluster commands, make sure you have access to an existing cluster with the `kubectl ate` plugin, a registry reachable by that cluster, and a snapshot bucket usable by its workers. This repository does not provision the cluster or document a `kubectl ate` version or installation procedure.
+
+Push both images to the reachable registry. Put each pushed `repo@sha256:...` digest in the matching image field in `provider.toml`; local image IDs are not registry digests. You can also record the pushed digests in `REVISION_PINS.md`. Copy the example config and replace its values: set `atespace` (in the top-level setting and both template entries), the worker label key and value used by your cluster, the snapshot bucket URI, and both registry image digests. Set each template's CPU and memory values to the limits in its rendered template (currently 1 CPU and 512 MB for both).
+
+```sh
+cp provider.example.toml provider.toml
+```
+
+Render the templates, then install them into the existing cluster:
 
 ```sh
 uv run python scripts/check_cluster.py --config provider.toml --render-dir rendered-templates
@@ -38,11 +52,11 @@ kubectl ate create actor-template -f rendered-templates/agent.yaml
 kubectl ate create actor-template -f rendered-templates/verifier.yaml
 ```
 
-Use the pinned `kubectl ate` CLI for the cluster. The installed templates must route guest gRPC through the actor router and expose guest port 80 with `/readyz`.
+The installed templates must route guest gRPC through the actor router and expose guest port 80 with `/readyz`.
 
 ## Run the proof on the existing cluster
 
-In a separate terminal, create a private local port forward:
+In a separate terminal, from any directory, create a private local port forward:
 
 ```sh
 kubectl port-forward -n ate-env svc/ate-env-api 7777:7777
